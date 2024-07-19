@@ -40,7 +40,7 @@ require (
 	github.com/klauspost/filepathx v1.1.1
 	github.com/klauspost/pgzip v1.2.6
 	github.com/klauspost/readahead v1.4.0
-	github.com/klauspost/reedsolomon v1.12.2
+	github.com/klauspost/reedsolomon v1.12.3
 	github.com/lib/pq v1.10.9
 	github.com/lithammer/shortuuid/v4 v4.0.0
 	github.com/miekg/dns v1.1.61
@@ -55,7 +55,7 @@ require (
 	github.com/minio/madmin-go/v3 v3.0.58
 	github.com/minio/minio-go/v7 v7.0.73
 	github.com/minio/mux v1.9.0
-	github.com/minio/pkg/v3 v3.0.7
+	github.com/minio/pkg/v3 v3.0.8
 	github.com/minio/selfupdate v0.6.0
 	github.com/minio/simdjson-go v0.4.5
 	github.com/minio/sio v0.4.0
