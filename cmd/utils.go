@@ -906,7 +906,7 @@ type AuditLogOptions struct {
 	Object    string
 	VersionID string
 	Error     string
-	Tags      map[string]interface{}
+	Tags      map[string]string
 }
 
 // sends audit logs for internal subsystem activity
@@ -931,7 +931,7 @@ func auditLogInternal(ctx context.Context, opts AuditLogOptions) {
 	// Merge tag information if found - this is currently needed for tags
 	// set during decommissioning.
 	if reqInfo := logger.GetReqInfo(ctx); reqInfo != nil {
-		reqInfo.PopulateTagsMap(entry.Tags)
+		reqInfo.PopulateTagsMap(opts.Tags)
 	}
 	ctx = logger.SetAuditEntry(ctx, &entry)
 	logger.AuditLog(ctx, nil, nil, nil)
