@@ -51,13 +51,13 @@ require (
 	github.com/minio/highwayhash v1.0.3
 	github.com/minio/kms-go/kes v0.3.0
 	github.com/minio/kms-go/kms v0.4.0
-	github.com/minio/madmin-go/v3 v3.0.64
+	github.com/minio/madmin-go/v3 v3.0.66
 	github.com/minio/minio-go/v7 v7.0.76
 	github.com/minio/mux v1.9.0
 	github.com/minio/pkg/v3 v3.0.13
 	github.com/minio/selfupdate v0.6.0
 	github.com/minio/simdjson-go v0.4.5
-	github.com/minio/sio v0.4.0
+	github.com/minio/sio v0.4.1
 	github.com/minio/xxml v0.0.3
 	github.com/minio/zipindex v0.3.1
 	github.com/mitchellh/go-homedir v1.1.0
