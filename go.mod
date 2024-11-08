@@ -27,7 +27,7 @@ require (
 	github.com/go-openapi/loads v0.22.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/gobwas/ws v1.4.0
-	github.com/golang-jwt/jwt/v4 v4.5.0
+	github.com/golang-jwt/jwt/v4 v4.5.1
 	github.com/gomodule/redigo v1.9.2
 	github.com/google/uuid v1.6.0
 	github.com/inconshreveable/mousetrap v1.1.0
@@ -42,7 +42,7 @@ require (
 	github.com/lithammer/shortuuid/v4 v4.0.0
 	github.com/miekg/dns v1.1.62
 	github.com/minio/cli v1.24.2
-	github.com/minio/console v1.7.1
+	github.com/minio/console v1.7.3
 	github.com/minio/csvparser v1.0.0
 	github.com/minio/dnscache v0.1.1
 	github.com/minio/dperf v0.6.0
@@ -52,7 +52,7 @@ require (
 	github.com/minio/madmin-go/v3 v3.0.70
 	github.com/minio/minio-go/v7 v7.0.77
 	github.com/minio/mux v1.9.0
-	github.com/minio/pkg/v3 v3.0.20
+	github.com/minio/pkg/v3 v3.0.22
 	github.com/minio/selfupdate v0.6.0
 	github.com/minio/simdjson-go v0.4.5
 	github.com/minio/sio v0.4.1
