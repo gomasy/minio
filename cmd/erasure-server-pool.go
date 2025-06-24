@@ -1534,10 +1534,8 @@ func (z *erasureServerPools) listObjectsGeneric(ctx context.Context, bucket, pre
 		}
 
 		if loi.IsTruncated && merged.lastSkippedEntry > loi.NextMarker {
-			// An object hidden by ILM was found during a truncated listing. Since the number of entries
-			// fetched from drives is limited by max-keys, we should use the last ILM filtered entry
-			// as a continuation token if it is lexially higher than the last visible object so that the
-			// next call of WalkDir() with the max-keys can reach new objects not seen previously.
+			// An object hidden by ILM was found during a truncated listing. Set the next marker
+			// as the last skipped entry if it is lexically higher loi.NextMarker as an optimization
 			loi.NextMarker = merged.lastSkippedEntry
 		}
 
@@ -1715,7 +1713,9 @@ func (z *erasureServerPools) ListMultipartUploads(ctx context.Context, bucket, p
 		}
 
 		z.mpCache.Range(func(_ string, mp MultipartInfo) bool {
-			poolResult.Uploads = append(poolResult.Uploads, mp)
+			if mp.Bucket == bucket {
+				poolResult.Uploads = append(poolResult.Uploads, mp)
+			}
 			return true
 		})
 		sort.Slice(poolResult.Uploads, func(i int, j int) bool {
