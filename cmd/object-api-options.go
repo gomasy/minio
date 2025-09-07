@@ -226,7 +226,7 @@ func getAndValidateAttributesOpts(ctx context.Context, w http.ResponseWriter, r 
 func parseObjectAttributes(h http.Header) (attributes map[string]struct{}) {
 	attributes = make(map[string]struct{})
 	for _, headerVal := range h.Values(xhttp.AmzObjectAttributes) {
-		for _, v := range strings.Split(strings.TrimSpace(headerVal), ",") {
+		for v := range strings.SplitSeq(strings.TrimSpace(headerVal), ",") {
 			if v != "" {
 				attributes[v] = struct{}{}
 			}
@@ -414,12 +414,16 @@ func putOptsFromHeaders(ctx context.Context, hdr http.Header, metadata map[strin
 		if err != nil {
 			return ObjectOptions{}, err
 		}
-		return ObjectOptions{
+		op := ObjectOptions{
 			ServerSideEncryption: sseKms,
 			UserDefined:          metadata,
 			MTime:                mtime,
 			PreserveETag:         etag,
-		}, nil
+		}
+		if _, ok := hdr[xhttp.MinIOSourceReplicationRequest]; ok {
+			op.ReplicationRequest = true
+		}
+		return op, nil
 	}
 	// default case of passing encryption headers and UserDefined metadata to backend
 	opts, err = getDefaultOpts(hdr, false, metadata)
