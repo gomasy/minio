@@ -233,7 +233,7 @@ func (p poolMeta) ResumeBucketObject(idx int) (bucket, object string) {
 		bucket = p.Pools[idx].Decommission.Bucket
 		object = p.Pools[idx].Decommission.Object
 	}
-	return
+	return bucket, object
 }
 
 func (p *poolMeta) TrackCurrentBucketObject(idx int, bucket string, object string) {
@@ -568,6 +568,7 @@ func newPoolMeta(z *erasureServerPools, prevMeta poolMeta) poolMeta {
 		for _, currentPool := range prevMeta.Pools {
 			// Preserve any current pool status.
 			if currentPool.CmdLine == pool.endpoints.CmdLine {
+				currentPool.ID = idx
 				newMeta.Pools = append(newMeta.Pools, currentPool)
 				skip = true
 				break
