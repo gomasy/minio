@@ -58,3 +58,9 @@ xl-meta
 .goreleaser.yml
 
 dist/
+
+
+.claude/
+.codex/
+_bmad/
+_bmad-output/
