@@ -46,6 +46,7 @@ dockers:
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
     extra_files:
       - dockerscripts/docker-entrypoint.sh
+      - dockerscripts/download-static-curl.sh
       - LICENSE
       - CREDITS
 
@@ -66,6 +67,7 @@ dockers:
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
     extra_files:
       - dockerscripts/docker-entrypoint.sh
+      - dockerscripts/download-static-curl.sh
       - LICENSE
       - CREDITS
 

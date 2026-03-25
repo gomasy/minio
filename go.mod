@@ -5,6 +5,11 @@ go 1.26.1
 // Use Georg Mangold's maintained Console fork while keeping upstream import paths.
 replace github.com/minio/console => github.com/georgmangold/console v1.9.1
 
+// Fix LDAP TLS regression: DialURL() was not passing TLS config for ldaps:// connections,
+// causing InsecureSkipVerify, RootCAs, and other TLS settings to be silently ignored.
+// See: https://github.com/pgsty/minio/issues/15
+replace github.com/minio/pkg/v3 => github.com/pgsty/minio-pkg/v3 v3.6.3
+
 // Install tools using 'go install tool'.
 tool (
 	github.com/tinylib/msgp
@@ -17,7 +22,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.4
-	github.com/IBM/sarama v1.47.0
+	github.com/IBM/sarama v1.45.1
 	github.com/alecthomas/participle v0.7.1
 	github.com/beevik/ntp v1.5.0
 	github.com/buger/jsonparser v1.1.2
@@ -33,7 +38,7 @@ require (
 	github.com/fatih/color v1.19.0
 	github.com/felixge/fgprof v0.9.5
 	github.com/fraugster/parquet-go v0.12.0
-	github.com/go-ldap/ldap/v3 v3.4.13
+	github.com/go-ldap/ldap/v3 v3.4.12
 	github.com/go-openapi/loads v0.23.3
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/gobwas/ws v1.4.0
@@ -48,7 +53,7 @@ require (
 	github.com/klauspost/pgzip v1.2.6
 	github.com/klauspost/readahead v1.4.0
 	github.com/klauspost/reedsolomon v1.13.3
-	github.com/lib/pq v1.12.0
+	github.com/lib/pq v1.10.9
 	github.com/lithammer/shortuuid/v4 v4.2.0
 	github.com/miekg/dns v1.1.72
 	github.com/minio/cli v1.24.2
@@ -93,8 +98,8 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0
 	github.com/xdg/scram v1.0.5
 	github.com/zeebo/xxh3 v1.1.0
-	go.etcd.io/etcd/api/v3 v3.6.9
-	go.etcd.io/etcd/client/v3 v3.6.9
+	go.etcd.io/etcd/api/v3 v3.6.8
+	go.etcd.io/etcd/client/v3 v3.6.8
 	go.uber.org/atomic v1.11.0
 	go.uber.org/zap v1.27.1
 	go.yaml.in/yaml/v3 v3.0.4
@@ -147,6 +152,7 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/eapache/go-resiliency v1.7.0 // indirect
+	github.com/eapache/go-xerial-snappy v0.0.0-20230731223053-c322873962e3 // indirect
 	github.com/eapache/queue v1.1.0 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
@@ -213,11 +219,13 @@ require (
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.4 // indirect
+	github.com/lestrrat-go/dsig v1.0.0 // indirect
+	github.com/lestrrat-go/dsig-secp256k1 v1.0.0 // indirect
 	github.com/lestrrat-go/httpcc v1.0.1 // indirect
-	github.com/lestrrat-go/httprc v1.0.6 // indirect
-	github.com/lestrrat-go/iter v1.0.2 // indirect
-	github.com/lestrrat-go/jwx/v2 v2.1.6 // indirect
+	github.com/lestrrat-go/httprc/v3 v3.0.1 // indirect
+	github.com/lestrrat-go/jwx/v3 v3.0.12 // indirect
 	github.com/lestrrat-go/option v1.0.1 // indirect
+	github.com/lestrrat-go/option/v2 v2.0.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20260216142805-b3301c5f2a88 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
@@ -264,11 +272,12 @@ require (
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/unrolled/secure v1.17.0 // indirect
+	github.com/valyala/fastjson v1.6.4 // indirect
 	github.com/vbauerster/mpb/v8 v8.12.0 // indirect
 	github.com/xdg/stringprep v1.0.3 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	go.etcd.io/etcd/client/pkg/v3 v3.6.9 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.6.8 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.42.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.67.0 // indirect
