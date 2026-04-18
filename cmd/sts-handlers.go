@@ -25,15 +25,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/minio/madmin-go/v3"
 	"github.com/minio/minio/internal/auth"
+	idldap "github.com/minio/minio/internal/config/identity/ldap"
 	"github.com/minio/minio/internal/config/identity/openid"
+	"github.com/minio/minio/internal/handlers"
 	"github.com/minio/minio/internal/hash/sha256"
 	xhttp "github.com/minio/minio/internal/http"
 	"github.com/minio/minio/internal/logger"
@@ -91,6 +95,15 @@ const (
 
 	// maximum supported STS session policy size
 	maxSTSSessionPolicySize = 2048
+
+	stsLDAPLoginBurst         = 10
+	stsLDAPLoginEntryTTL      = 15 * time.Minute
+	stsLDAPLoginRetryAfterSec = int((time.Minute / stsLDAPLoginBurst) / time.Second)
+)
+
+var (
+	errLDAPAuthenticationFailed   = errors.New("LDAP authentication failed")
+	globalSTSLDAPLoginRateLimiter = newSTSLDAPLoginRateLimiter(time.Minute/time.Duration(stsLDAPLoginBurst), stsLDAPLoginBurst, stsLDAPLoginEntryTTL)
 )
 
 type stsClaims map[string]any
@@ -252,6 +265,300 @@ func getTokenSigningKey() (string, error) {
 		return secretKey, nil
 	}
 	return secret, nil
+}
+
+type stsLDAPLoginRateLimiter struct {
+	source *stsLDAPLoginKeyLimiterSet
+	user   *stsLDAPLoginKeyLimiterSet
+}
+
+type stsLDAPLoginReservation struct {
+	source *stsLDAPLoginKeyReservation
+	user   *stsLDAPLoginKeyReservation
+}
+
+type stsLDAPLoginKeyLimiterSet struct {
+	mu          sync.Mutex
+	refillEvery time.Duration
+	burst       int
+	ttl         time.Duration
+	lastCleanup time.Time
+	entries     map[string]*stsLDAPLoginKeyLimiter
+}
+
+type stsLDAPLoginKeyLimiter struct {
+	tokens     float64
+	lastRefill time.Time
+	lastSeen   time.Time
+	inFlight   int
+}
+
+type stsLDAPLoginKeyReservation struct {
+	set       *stsLDAPLoginKeyLimiterSet
+	entry     *stsLDAPLoginKeyLimiter
+	finalized bool
+}
+
+func newSTSLDAPLoginRateLimiter(refillEvery time.Duration, burst int, ttl time.Duration) *stsLDAPLoginRateLimiter {
+	return &stsLDAPLoginRateLimiter{
+		source: newSTSLDAPLoginKeyLimiterSet(refillEvery, burst, ttl),
+		user:   newSTSLDAPLoginKeyLimiterSet(refillEvery, burst, ttl),
+	}
+}
+
+func newSTSLDAPLoginKeyLimiterSet(refillEvery time.Duration, burst int, ttl time.Duration) *stsLDAPLoginKeyLimiterSet {
+	return &stsLDAPLoginKeyLimiterSet{
+		refillEvery: refillEvery,
+		burst:       burst,
+		ttl:         ttl,
+		entries:     make(map[string]*stsLDAPLoginKeyLimiter),
+	}
+}
+
+func normalizeSTSLDAPUsername(username string) string {
+	return strings.ToLower(strings.TrimSpace(username))
+}
+
+func (l *stsLDAPLoginRateLimiter) Allow(sourceIP, username string) bool {
+	reservation := l.Reserve(sourceIP, username)
+	if reservation == nil {
+		return false
+	}
+	reservation.Commit()
+	return true
+}
+
+func (l *stsLDAPLoginRateLimiter) Reserve(sourceIP, username string) *stsLDAPLoginReservation {
+	now := UTCNow()
+	reservation := &stsLDAPLoginReservation{}
+
+	if sourceIP != "" {
+		reservation.source = l.source.Reserve(now, sourceIP)
+		if reservation.source == nil {
+			return nil
+		}
+	}
+
+	username = normalizeSTSLDAPUsername(username)
+	if username != "" {
+		reservation.user = l.user.Reserve(now, username)
+		if reservation.user == nil {
+			reservation.Cancel()
+			return nil
+		}
+	}
+
+	return reservation
+}
+
+func (r *stsLDAPLoginReservation) Commit() {
+	if r == nil {
+		return
+	}
+	if r.source != nil {
+		r.source.CommitAt(UTCNow())
+		r.source = nil
+	}
+	if r.user != nil {
+		r.user.CommitAt(UTCNow())
+		r.user = nil
+	}
+}
+
+func (r *stsLDAPLoginReservation) Cancel() {
+	if r == nil {
+		return
+	}
+	if r.source != nil {
+		r.source.CancelAt(UTCNow())
+		r.source = nil
+	}
+	if r.user != nil {
+		r.user.CancelAt(UTCNow())
+		r.user = nil
+	}
+}
+
+func (l *stsLDAPLoginKeyLimiterSet) Allow(now time.Time, key string) bool {
+	reservation := l.Reserve(now, key)
+	if reservation == nil {
+		return false
+	}
+	reservation.CommitAt(now)
+	return true
+}
+
+func (l *stsLDAPLoginKeyLimiterSet) Reserve(now time.Time, key string) *stsLDAPLoginKeyReservation {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.lastCleanup.IsZero() || now.Sub(l.lastCleanup) >= l.ttl {
+		l.cleanup(now)
+		l.lastCleanup = now
+	}
+
+	entry := l.getOrCreateLocked(now, key)
+	l.refillLocked(now, entry)
+	if entry.tokens < 1 {
+		entry.lastSeen = now
+		return nil
+	}
+
+	entry.tokens--
+	entry.inFlight++
+	entry.lastSeen = now
+	return &stsLDAPLoginKeyReservation{set: l, entry: entry}
+}
+
+func (l *stsLDAPLoginKeyLimiterSet) cleanup(now time.Time) {
+	for key, entry := range l.entries {
+		if entry.inFlight == 0 && now.Sub(entry.lastSeen) > l.ttl {
+			delete(l.entries, key)
+		}
+	}
+}
+
+func (l *stsLDAPLoginKeyLimiterSet) getOrCreateLocked(now time.Time, key string) *stsLDAPLoginKeyLimiter {
+	entry, ok := l.entries[key]
+	if !ok {
+		entry = &stsLDAPLoginKeyLimiter{
+			tokens:     float64(l.burst),
+			lastRefill: now,
+			lastSeen:   now,
+		}
+		l.entries[key] = entry
+	}
+	return entry
+}
+
+func (l *stsLDAPLoginKeyLimiterSet) refillLocked(now time.Time, entry *stsLDAPLoginKeyLimiter) {
+	if entry.lastRefill.IsZero() {
+		entry.lastRefill = now
+	}
+
+	lastRefill := entry.lastRefill
+	if now.Before(lastRefill) {
+		lastRefill = now
+	}
+	if l.refillEvery <= 0 {
+		entry.lastRefill = now
+		entry.tokens = l.maxTokensLocked(entry)
+		return
+	}
+
+	entry.tokens += float64(now.Sub(lastRefill)) / float64(l.refillEvery)
+	if maxTokens := l.maxTokensLocked(entry); entry.tokens > maxTokens {
+		entry.tokens = maxTokens
+	}
+	entry.lastRefill = now
+}
+
+func (l *stsLDAPLoginKeyLimiterSet) maxTokensLocked(entry *stsLDAPLoginKeyLimiter) float64 {
+	maxTokens := l.burst - entry.inFlight
+	if maxTokens < 0 {
+		return 0
+	}
+	return float64(maxTokens)
+}
+
+func (r *stsLDAPLoginKeyReservation) CommitAt(now time.Time) {
+	r.finalize(now, false)
+}
+
+func (r *stsLDAPLoginKeyReservation) CancelAt(now time.Time) {
+	r.finalize(now, true)
+}
+
+func (r *stsLDAPLoginKeyReservation) finalize(now time.Time, refund bool) {
+	if r == nil {
+		return
+	}
+
+	r.set.mu.Lock()
+	defer r.set.mu.Unlock()
+
+	if r.finalized {
+		return
+	}
+
+	r.set.refillLocked(now, r.entry)
+	r.entry.lastSeen = now
+	if r.entry.inFlight > 0 {
+		r.entry.inFlight--
+	}
+	if refund {
+		r.entry.tokens++
+		if maxTokens := r.set.maxTokensLocked(r.entry); r.entry.tokens > maxTokens {
+			r.entry.tokens = maxTokens
+		}
+	}
+
+	r.finalized = true
+}
+
+func getSTSLDAPLoginSourceIP(r *http.Request) string {
+	peerIP := getSTSLDAPLoginCanonicalIP(r.RemoteAddr)
+	sourceIP := peerIP
+	if sourceIP == "" {
+		sourceIP = getSTSLDAPLoginPeerAddr(r.RemoteAddr)
+	}
+	if peerIP != "" && globalIAMSys != nil && globalIAMSys.LDAPConfig.IsSTSTrustedProxy(peerIP) {
+		if forwardedIP := getSTSLDAPTrustedProxySourceIP(r); forwardedIP != "" {
+			return forwardedIP
+		}
+	}
+	return sourceIP
+}
+
+func getSTSLDAPTrustedProxySourceIP(r *http.Request) string {
+	if realIP := getSTSLDAPLoginCanonicalIP(r.Header.Get("X-Real-IP")); realIP != "" {
+		return realIP
+	}
+	return getSTSLDAPLoginCanonicalIP(handlers.GetSourceIPFromHeaders(r))
+}
+
+func getSTSLDAPLoginPeerAddr(remoteAddr string) string {
+	sourceIP, _, err := net.SplitHostPort(remoteAddr)
+	if err == nil {
+		return sourceIP
+	}
+	return remoteAddr
+}
+
+func getSTSLDAPLoginCanonicalIP(addr string) string {
+	addr = strings.TrimSpace(getSTSLDAPLoginPeerAddr(addr))
+	addr = strings.TrimPrefix(addr, "[")
+	addr = strings.TrimSuffix(addr, "]")
+	if ip := net.ParseIP(addr); ip != nil {
+		return ip.String()
+	}
+	return ""
+}
+
+// reserveSTSLDAPLogin acquires immediate tokens from the per-source and
+// per-username limiters before contacting LDAP. Call Commit on auth failures
+// and Cancel when the attempt should not count as an authentication failure.
+func reserveSTSLDAPLogin(r *http.Request) *stsLDAPLoginReservation {
+	return globalSTSLDAPLoginRateLimiter.Reserve(getSTSLDAPLoginSourceIP(r), r.Form.Get(stsLDAPUsername))
+}
+
+func ldapBindErrorToSTS(err error) (STSErrorCode, error) {
+	if idldap.IsAuthError(err) {
+		return ErrSTSInvalidParameterValue, errLDAPAuthenticationFailed
+	}
+	return ErrSTSUpstreamError, nil
+}
+
+func writeSTSThrottledResponse(w http.ResponseWriter) {
+	stsErrorResponse := STSErrorResponse{}
+	stsErrorResponse.Error.Code = "ThrottlingException"
+	stsErrorResponse.Error.Message = "Request throttled, please retry later."
+	stsErrorResponse.RequestID = w.Header().Get(xhttp.AmzRequestID)
+
+	w.Header().Set("Retry-After", strconv.Itoa(stsLDAPLoginRetryAfterSec))
+
+	encodedErrorResponse := encodeResponse(stsErrorResponse)
+	writeResponse(w, http.StatusTooManyRequests, encodedErrorResponse, mimeXML)
 }
 
 // AssumeRole - implementation of AWS STS API AssumeRole to get temporary
@@ -690,12 +997,26 @@ func (sts *stsAPIHandlers) AssumeRoleWithLDAPIdentity(w http.ResponseWriter, r *
 		return
 	}
 
-	lookupResult, groupDistNames, err := globalIAMSys.LDAPConfig.Bind(ldapUsername, ldapPassword)
-	if err != nil {
-		err = fmt.Errorf("LDAP server error: %w", err)
-		writeSTSErrorResponse(ctx, w, ErrSTSInvalidParameterValue, err)
+	loginReservation := reserveSTSLDAPLogin(r)
+	if loginReservation == nil {
+		writeSTSThrottledResponse(w)
 		return
 	}
+	defer loginReservation.Cancel()
+
+	lookupResult, groupDistNames, err := globalIAMSys.LDAPConfig.Bind(ldapUsername, ldapPassword)
+	if err != nil {
+		errCode, errResp := ldapBindErrorToSTS(err)
+		if errCode == ErrSTSUpstreamError {
+			loginReservation.Cancel()
+			stsLogIf(ctx, err, logger.ErrorKind)
+		} else {
+			loginReservation.Commit()
+		}
+		writeSTSErrorResponse(ctx, w, errCode, errResp)
+		return
+	}
+	loginReservation.Cancel()
 	ldapUserDN := lookupResult.NormDN
 	ldapActualUserDN := lookupResult.ActualDN
 
