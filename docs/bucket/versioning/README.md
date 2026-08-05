@@ -211,7 +211,7 @@ public class IsVersioningEnabled {
 
 ## Explore Further
 
-- [Use `minio-java` SDK with MinIO Server](https://docs.min.io/community/minio-object-store/developers/java/minio-java.html)
-- [Object Lock and Immutability Guide](https://docs.min.io/community/minio-object-store/administration/object-management/object-retention.html)
-- [MinIO Admin Complete Guide](https://docs.min.io/community/minio-object-store/reference/minio-mc-admin.html)
-- [The MinIO documentation website](https://docs.min.io/community/minio-object-store/index.html)
+- [Use `minio-java` SDK with MinIO Server](https://silo.pgsty.com/developers/java/minio-java/)
+- [Object Lock and Immutability Guide](https://silo.pgsty.com/administration/object-management/object-retention/)
+- [MinIO Admin Complete Guide](https://silo.pgsty.com/reference/minio-mc-admin/)
+- [The MinIO documentation website](https://silo.pgsty.com/docs/)

@@ -4,7 +4,7 @@ MinIO is a cloud-native application designed to scale in a sustainable manner in
 
 | Orchestration platforms                                                                            |
 |:---------------------------------------------------------------------------------------------------|
-| [`Kubernetes`](https://docs.min.io/community/minio-object-store/operations/deployments/kubernetes.html)                                |
+| [`Kubernetes`](https://silo.pgsty.com/operations/deployments/kubernetes/)                                |
 
 ## Why is MinIO cloud-native?
 

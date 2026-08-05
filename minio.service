@@ -1,6 +1,6 @@
 [Unit]
 Description=MinIO
-Documentation=https://docs.min.io
+Documentation=https://silo.pgsty.com/docs/
 Wants=network-online.target
 After=network-online.target
 AssertFileIsExecutable=/usr/local/bin/minio
@@ -39,5 +39,3 @@ SendSIGKILL=no
 
 [Install]
 WantedBy=multi-user.target
-
-# Built for ${project.name}-${project.version} (${project.name})

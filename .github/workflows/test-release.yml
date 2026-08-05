@@ -5,10 +5,17 @@ on:
   pull_request:
     paths:
       - ".github/goreleaser.yml"
+      - ".github/nfpm.yml"
       - "Dockerfile.goreleaser"
+      - "dockerscripts/docker-entrypoint.sh"
       - "minio.service"
+      - "buildscripts/package-release.sh"
+      - "buildscripts/sign-release-rpms.sh"
+      - "buildscripts/verify-build-provenance.sh"
+      - "buildscripts/gen-ldflags.go"
       - ".github/workflows/release.yml"
       - ".github/workflows/test-release.yml"
+      - ".gitignore"
 
 permissions:
   contents: read
@@ -35,9 +42,11 @@ jobs:
           VERSION_COLON="2026-02-14T12:00:00Z"
           PKG_VERSION="20260214120000.0.0"
           LDFLAGS="$(MINIO_RELEASE=RELEASE go run buildscripts/gen-ldflags.go "${VERSION_COLON}")"
-          echo "RELEASE_TAG=${RELEASE_TAG}" >> "${GITHUB_ENV}"
-          echo "PKG_VERSION=${PKG_VERSION}" >> "${GITHUB_ENV}"
-          echo "LDFLAGS=${LDFLAGS}" >> "${GITHUB_ENV}"
+          {
+            echo "RELEASE_TAG=${RELEASE_TAG}"
+            echo "PKG_VERSION=${PKG_VERSION}"
+            echo "LDFLAGS=${LDFLAGS}"
+          } >> "${GITHUB_ENV}"
           echo "PKG_VERSION: ${PKG_VERSION}"
           echo "LDFLAGS: ${LDFLAGS}"
 
@@ -56,34 +65,213 @@ jobs:
           LDFLAGS: ${{ env.LDFLAGS }}
           PKG_VERSION: ${{ env.PKG_VERSION }}
 
-      - name: Install pkger
-        run: |
-          go install github.com/minio/pkger/v2@v2.6.18
-          echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
-
-      - name: Package snapshot binaries with pkger
+      - name: Verify binary provenance stamps
         run: |
           set -euo pipefail
-          copy_binary() {
-            local arch="$1"
-            local pattern="$2"
-            local src
-            src="$(find dist -maxdepth 2 -type f -path "dist/${pattern}/minio" | head -n1 || true)"
-            if [ -z "${src}" ]; then
-              echo "Missing GoReleaser binary for ${arch} (${pattern})"
-              exit 1
+          buildscripts/verify-build-provenance.sh
+
+      - name: Install package validation tools
+        run: |
+          set -euo pipefail
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
+          sudo apt-get update
+          sudo apt-get install --yes rpm binutils
+
+      - name: Package snapshot binaries with nFPM
+        run: |
+          set -euo pipefail
+          buildscripts/package-release.sh
+
+      - name: Validate package names, checksums, metadata, and payload
+        run: |
+          set -euo pipefail
+          cd dist/packages
+
+          # These are the public download names; a drift here breaks every
+          # script that fetches packages by URL.
+          expected=(
+            "minio-${PKG_VERSION}-1.aarch64.rpm"
+            "minio-${PKG_VERSION}-1.x86_64.rpm"
+            "minio_${PKG_VERSION}_aarch64.apk"
+            "minio_${PKG_VERSION}_amd64.deb"
+            "minio_${PKG_VERSION}_arm64.deb"
+            "minio_${PKG_VERSION}_x86_64.apk"
+          )
+
+          for package in "${expected[@]}"; do
+            test -s "${package}"
+            test -s "${package}.sha256sum"
+            sha256sum --check "${package}.sha256sum"
+          done
+
+          test "$(find . -maxdepth 1 -type f \( -name '*.rpm' -o -name '*.deb' -o -name '*.apk' \) | wc -l)" -eq 6
+
+          # The signing script asserts these same values, but it runs on the
+          # maintainer's machine after the release workflow has already built
+          # and uploaded. Take its expectations as the single source of truth
+          # so nfpm.yml and the signing script cannot drift apart without
+          # failing here first, while a fix is still cheap.
+          #
+          # This grep is deliberately limited to the seven identity variables,
+          # all of which are single-line. That is what makes the eval safe:
+          # should one ever become multi-line, the grep captures an
+          # unterminated quote and the eval aborts on a syntax error under
+          # set -e rather than quietly binding an empty value and comparing
+          # against nothing. expected_payload is multi-line by design and must
+          # stay out of this set for the same reason.
+          eval "$(grep -E '^expected_(vendor|packager|url|summary|description|license|group)=' \
+            ../../buildscripts/sign-release-rpms.sh)"
+          for value in "${expected_vendor}" "${expected_packager}" "${expected_url}" \
+                       "${expected_summary}" "${expected_description}" \
+                       "${expected_license}" "${expected_group}"; do
+            test -n "${value}"
+          done
+
+          service_sha="$(sha256sum ../../minio.service | awk '{print $1}')"
+
+          rpm_file="minio-${PKG_VERSION}-1.x86_64.rpm"
+          test "$(rpm -qp --queryformat '%{VENDOR}' "${rpm_file}")" = "${expected_vendor}"
+          test "$(rpm -qp --queryformat '%{PACKAGER}' "${rpm_file}")" = "${expected_packager}"
+          test "$(rpm -qp --queryformat '%{URL}' "${rpm_file}")" = "${expected_url}"
+          test "$(rpm -qp --queryformat '%{SUMMARY}' "${rpm_file}")" = "${expected_summary}"
+          test "$(rpm -qp --queryformat '%{DESCRIPTION}' "${rpm_file}")" = "${expected_description}"
+          test "$(rpm -qp --queryformat '%{LICENSE}' "${rpm_file}")" = "${expected_license}"
+          test "$(rpm -qp --queryformat '%{GROUP}' "${rpm_file}")" = "${expected_group}"
+          # Both payload entries: the unit file is as much a part of the
+          # package as the binary, and losing it would install a server with
+          # nothing to start it.
+          rpm -qpl "${rpm_file}" | grep -Fx '/usr/local/bin/minio'
+          rpm -qpl "${rpm_file}" | grep -Fx '/usr/lib/systemd/system/minio.service'
+          test "$(rpm -qpl "${rpm_file}" | wc -l)" -eq 2
+
+          deb_file="minio_${PKG_VERSION}_amd64.deb"
+          test "$(dpkg-deb --field "${deb_file}" Maintainer)" = "${expected_packager}"
+          test "$(dpkg-deb --field "${deb_file}" Version)" = "${PKG_VERSION}"
+          test "$(dpkg-deb --field "${deb_file}" License)" = "${expected_license}"
+          test "$(dpkg-deb --field "${deb_file}" Section)" = "utils"
+          test "$(dpkg-deb --field "${deb_file}" Homepage)" = "${expected_url}"
+          test "$(dpkg-deb --field "${deb_file}" Description)" = "${expected_description}"
+          dpkg-deb --contents "${deb_file}" | grep -E 'usr/local/bin/minio$'
+          dpkg-deb --contents "${deb_file}" | grep -E 'usr/lib/systemd/system/minio\.service$'
+
+          apk_info="$(tar -xOzf "minio_${PKG_VERSION}_x86_64.apk" .PKGINFO)"
+          grep -Fx "pkgver = ${PKG_VERSION}" <<< "${apk_info}"
+          grep -Fx "url = ${expected_url}" <<< "${apk_info}"
+          grep -Fx "maintainer = ${expected_packager}" <<< "${apk_info}"
+          grep -Fx "license = ${expected_license}" <<< "${apk_info}"
+          grep -Fx "pkgdesc = ${expected_description}" <<< "${apk_info}"
+          tar -tzf "minio_${PKG_VERSION}_x86_64.apk" | grep -Fx 'usr/local/bin/minio'
+          tar -tzf "minio_${PKG_VERSION}_x86_64.apk" | grep -Fx 'usr/lib/systemd/system/minio.service'
+
+          for arch in amd64 arm64; do
+            if [ "${arch}" = amd64 ]; then
+              rpm_arch=x86_64
+              deb_arch=amd64
+              apk_arch=x86_64
+            else
+              rpm_arch=aarch64
+              deb_arch=arm64
+              apk_arch=aarch64
             fi
-            mkdir -p "dist/linux-${arch}"
-            cp "${src}" "dist/linux-${arch}/minio.${RELEASE_TAG}"
+
+            test "$(rpm -qp --queryformat '%{ARCH}' "minio-${PKG_VERSION}-1.${rpm_arch}.rpm")" = "${rpm_arch}"
+            test "$(dpkg-deb --field "minio_${PKG_VERSION}_${deb_arch}.deb" Architecture)" = "${deb_arch}"
+            grep -Fx "arch = ${apk_arch}" <<< "$(tar -xOzf "minio_${PKG_VERSION}_${apk_arch}.apk" .PKGINFO)"
+
+            # Accepted weakness: this takes the first match, unsorted, where
+            # find_binary in package-release.sh demands exactly one. It cannot
+            # be reached with an ambiguous match today, because packaging runs
+            # earlier in this same job and hard-fails on one. Revisit if
+            # goamd64 gains a second level, or if find_binary's exactly-one
+            # contract is ever relaxed -- at that point this weak copy would be
+            # the only one left choosing silently.
+            source_binary="$(find .. -maxdepth 2 -type f -path "../minio_linux_${arch}*/minio" | head -n 1)"
+            source_sha="$(sha256sum "${source_binary}" | awk '{print $1}')"
+
+            # Do not pipe rpm2cpio here: Debian's build exits non-zero even when
+            # it writes a correct payload, which trips `set -o pipefail`. Use
+            # rpm's own digests instead -- -K checks the payload against the
+            # header, and FILEDIGESTS is the sha256 rpm itself verifies on
+            # install.
+            rpm -K "minio-${PKG_VERSION}-1.${rpm_arch}.rpm"
+            rpm_sha="$(rpm -qp --queryformat '[%{FILENAMES} %{FILEDIGESTS}\n]' \
+              "minio-${PKG_VERSION}-1.${rpm_arch}.rpm" | awk '$1 == "/usr/local/bin/minio" { print $2 }')"
+            rpm_service_sha="$(rpm -qp --queryformat '[%{FILENAMES} %{FILEDIGESTS}\n]' \
+              "minio-${PKG_VERSION}-1.${rpm_arch}.rpm" | awk '$1 == "/usr/lib/systemd/system/minio.service" { print $2 }')"
+            deb_sha="$(ar p "minio_${PKG_VERSION}_${deb_arch}.deb" data.tar.gz | tar -xzOf - ./usr/local/bin/minio | sha256sum | awk '{print $1}')"
+            deb_service_sha="$(ar p "minio_${PKG_VERSION}_${deb_arch}.deb" data.tar.gz | tar -xzOf - ./usr/lib/systemd/system/minio.service | sha256sum | awk '{print $1}')"
+            apk_sha="$(tar -xzOf "minio_${PKG_VERSION}_${apk_arch}.apk" usr/local/bin/minio | sha256sum | awk '{print $1}')"
+            apk_service_sha="$(tar -xzOf "minio_${PKG_VERSION}_${apk_arch}.apk" usr/lib/systemd/system/minio.service | sha256sum | awk '{print $1}')"
+
+            test "${source_sha}" = "${rpm_sha}"
+            test "${source_sha}" = "${deb_sha}"
+            test "${source_sha}" = "${apk_sha}"
+            test "${service_sha}" = "${rpm_service_sha}"
+            test "${service_sha}" = "${deb_service_sha}"
+            test "${service_sha}" = "${apk_service_sha}"
+          done
+
+          find . -maxdepth 1 -type f | sort
+
+      - name: Build release runtime image and verify graceful shutdown
+        run: |
+          set -euo pipefail
+          # docker-release.yml is workflow_dispatch only, so this is the only
+          # automated build of the release runtime layer and entrypoint before a
+          # real publish. Assemble a minimal image from the linux/amd64 binary
+          # goreleaser already produced; the mcli-download build stage is skipped
+          # on purpose to keep this gate offline and deterministic.
+          ctx="$(mktemp -d)"
+          tar -xzf "dist/minio_${PKG_VERSION}_linux_amd64.tar.gz" -C "${ctx}" minio
+          cp dockerscripts/docker-entrypoint.sh "${ctx}/docker-entrypoint.sh"
+          {
+            echo "FROM registry.access.redhat.com/ubi9/ubi-micro:latest"
+            echo "COPY minio /usr/bin/minio"
+            echo "COPY docker-entrypoint.sh /usr/bin/docker-entrypoint.sh"
+            echo "RUN mkdir -p /data && chmod 0777 /data && chmod +x /usr/bin/minio /usr/bin/docker-entrypoint.sh"
+            echo 'ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]'
+            echo 'CMD ["minio"]'
+          } > "${ctx}/Dockerfile"
+          docker build -t minio-runtime-test:snapshot "${ctx}"
+
+          # PID 1 must be minio, not the entry shell, on every privilege path, so
+          # a SIGTERM from docker stop reaches the server and it exits gracefully
+          # instead of being killed at the stop timeout. Regression guard for the
+          # exec-into-chroot entrypoint fix.
+          assert_graceful() {
+            name="$1"; shift
+            docker rm -f "${name}" >/dev/null 2>&1 || true
+            docker run -d --name "${name}" \
+              -e MINIO_CI_CD=1 -e MINIO_ROOT_USER=ciadmin -e MINIO_ROOT_PASSWORD=ciadmin-secret-123 \
+              "$@" minio-runtime-test:snapshot minio server /data --address :9000 >/dev/null
+            up=""
+            for _ in $(seq 1 60); do
+              if docker logs "${name}" 2>&1 | grep -q "API:"; then up=1; break; fi
+              if [ "$(docker inspect -f '{{.State.Running}}' "${name}")" != "true" ]; then break; fi
+              sleep 1
+            done
+            if [ -z "${up}" ]; then echo "server did not start (${name}):"; docker logs "${name}" | tail -5; exit 1; fi
+            pid1="$(docker exec "${name}" cat /proc/1/comm 2>/dev/null || echo '?')"
+            start="$(date +%s)"; docker stop -t 15 "${name}" >/dev/null; end="$(date +%s)"
+            code="$(docker inspect -f '{{.State.ExitCode}}' "${name}")"
+            elapsed=$((end - start))
+            echo "${name}: pid1=${pid1} stop=${elapsed}s exit=${code}"
+            graceful=0; docker logs "${name}" 2>&1 | grep -q "Exiting on signal" && graceful=1
+            docker rm -f "${name}" >/dev/null 2>&1 || true
+            [ "${graceful}" = "1" ] || { echo "no graceful-shutdown log (${name}) - signal not forwarded"; exit 1; }
+            [ "${code}" = "0" ] || { echo "non-zero exit (${name}): ${code}"; exit 1; }
+            [ "${elapsed}" -lt 10 ] || { echo "shutdown too slow (${name}): ${elapsed}s - signal not forwarded"; exit 1; }
           }
+          assert_graceful minio-rt-default
+          assert_graceful minio-rt-dropuser -e MINIO_USERNAME=minio-user -e MINIO_GROUPNAME=minio-group
 
-          copy_binary amd64 "minio_linux_amd64*"
-          copy_binary arm64 "minio_linux_arm64*"
-          pkger -r "${RELEASE_TAG}" --appName minio --releaseDir dist --ignore
-
-          # Keep only full package files; drop convenience symlinks (minio.rpm/minio.deb/minio.apk)
-          find dist/linux-* -maxdepth 1 -type l \
-            \( -name 'minio.rpm' -o -name 'minio.deb' -o -name 'minio.apk' \) -delete
-
-          find dist -maxdepth 2 -type f \
-            \( -name '*.rpm' -o -name '*.deb' -o -name '*.apk' -o -name '*.sha256sum' -o -name 'downloads-minio.json' \) | sort
+      - name: Validate release scripts
+        run: |
+          set -euo pipefail
+          bash -n buildscripts/package-release.sh
+          bash -n buildscripts/sign-release-rpms.sh
+          bash -n buildscripts/verify-build-provenance.sh
+          test -x buildscripts/package-release.sh
+          test -x buildscripts/sign-release-rpms.sh
+          test -x buildscripts/verify-build-provenance.sh

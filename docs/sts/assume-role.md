@@ -89,7 +89,7 @@ export MINIO_ROOT_PASSWORD=minio123
 minio server ~/test
 ```
 
-Create new users following the multi-user guide [here](https://docs.min.io/community/minio-object-store/administration/identity-access-management.html)
+Create new users following the multi-user guide [here](https://silo.pgsty.com/administration/identity-access-management/)
 
 ### Testing an example with awscli tool
 
@@ -134,5 +134,5 @@ SessionToken: eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3NLZXkiOiIyN1lEUllFT
 
 ## Explore Further
 
-- [MinIO Admin Complete Guide](https://docs.min.io/community/minio-object-store/reference/minio-mc-admin.html)
-- [The MinIO documentation website](https://docs.min.io/community/minio-object-store/index.html)
+- [MinIO Admin Complete Guide](https://silo.pgsty.com/reference/minio-mc-admin/)
+- [The MinIO documentation website](https://silo.pgsty.com/docs/)

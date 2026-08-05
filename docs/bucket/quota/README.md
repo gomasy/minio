@@ -6,8 +6,8 @@ Buckets can be configured to have `Hard` quota - it disallows writes to the buck
 
 ## Prerequisites
 
-- Install MinIO - [MinIO Quickstart Guide](https://docs.min.io/community/minio-object-store/operations/deployments/baremetal-deploy-minio-on-redhat-linux.html#procedure).
-- [Use `mc` with MinIO Server](https://docs.min.io/community/minio-object-store/reference/minio-mc.html#quickstart)
+- Install MinIO - [MinIO Quickstart Guide](https://silo.pgsty.com/operations/deployments/baremetal-deploy-minio-on-redhat-linux/#procedure).
+- [Use `mc` with MinIO Server](https://silo.pgsty.com/reference/minio-mc/#quickstart)
 
 ## Set bucket quota configuration
 
