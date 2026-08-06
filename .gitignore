@@ -2,6 +2,7 @@
 cover.out
 *~
 minio
+silo
 !*/
 site/
 **/*.test
@@ -66,3 +67,4 @@ CLAUDE.md
 _bmad/
 _bmad-output/
 docs/security/
+docs/rebranding.md

@@ -2,15 +2,15 @@ module github.com/minio/minio
 
 go 1.26.5
 
-// Use Pigsty's SILO Console v2.0.0 release while preserving upstream import paths.
-// The pseudo-version pins v2.0.0's commit because the compatible module path has no /v2 suffix.
-replace github.com/minio/console => github.com/pgsty/silo-console v0.0.0-20260804042150-b952a1202869
+// Use Pigsty's SILO Console v2.1.1 release while preserving upstream import paths.
+// The pseudo-version pins v2.1.1's commit because the compatible module path has no /v2 suffix.
+replace github.com/minio/console => github.com/pgsty/silo-console v0.0.0-20260806061103-72fc0a5ea52a
 
 // Use Pigsty's maintained mc fork for Console's embedded client code.
 replace github.com/minio/mc => github.com/pgsty/mc v0.0.0-20260801042411-ad10a2a10b76
 
 // Use Pigsty's maintained SILO package fork while preserving upstream import paths.
-// This retains the LDAP TLS fix tracked in https://github.com/pgsty/minio/issues/15.
+// This retains the LDAP TLS fix tracked in https://github.com/pgsty/silo/issues/15.
 // v3.11.0 follows upstream minio/pkg's 3.11 line and carries the
 // minio/minio#20449 bucket-write boundary hardening.
 replace github.com/minio/pkg/v3 => github.com/pgsty/silo-pkg/v3 v3.11.0

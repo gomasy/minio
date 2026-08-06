@@ -1,8 +1,13 @@
-## Community Contribution License
-All community contributions in this pull request are licensed to the project maintainers
-under the terms of the [Apache 2 license](https://www.apache.org/licenses/LICENSE-2.0). 
-By creating this pull request I represent that I have the right to license the 
-contributions to the project maintainers under the Apache 2 license.
+## Contribution Licensing (no CLA, inbound=outbound, DCO required)
+
+This project does not use a CLA; contributions are accepted inbound=outbound.
+By submitting this pull request I represent that I have the right to contribute
+the changes, which are licensed under this repository's
+[GNU Affero General Public License v3.0 or later](https://www.gnu.org/licenses/agpl-3.0.html)
+and remain my copyright. Every commit must carry a DCO `Signed-off-by` trailer
+(`git commit -s`) certifying the
+[Developer Certificate of Origin](https://developercertificate.org/) — see
+[CONTRIBUTING.md](https://github.com/pgsty/silo/blob/main/CONTRIBUTING.md).
 
 ## Description
 
@@ -13,6 +18,12 @@ contributions to the project maintainers under the Apache 2 license.
 ## How to test this PR?
 
 
+## Compatibility impact
+
+<!-- Note effects on APIs, clients, MINIO_* configuration, metrics, headers,
+routes, storage metadata, module/import paths, upgrades, or rollback. -->
+
+
 ## Types of changes
 - [ ] Bug fix (non-breaking change which fixes an issue)
 - [ ] New feature (non-breaking change which adds functionality)
@@ -20,7 +31,11 @@ contributions to the project maintainers under the Apache 2 license.
 - [ ] Breaking change (fix or feature that would cause existing functionality to change)
 
 ## Checklist:
+- [ ] All commits are signed off (`git commit -s`) per the [DCO](https://developercertificate.org/)
 - [ ] Fixes a regression (If yes, please add `commit-id` or `PR #` here)
 - [ ] Unit tests added/updated
+- [ ] `make verifiers` passes
+- [ ] Relevant package tests and `make build` pass
+- [ ] Compatibility and rollback impact documented
 - [ ] Internal documentation updated
-- [ ] Create a documentation update request [here](https://github.com/minio/docs/issues/new?label=doc-change,title=Doc+Updated+Needed+For+PR+github.com%2fminio%2fminio%2fpull%2fNNNNN)
+- [ ] Public documentation update opened in `pgsty/silo.pgsty.com`, if needed
