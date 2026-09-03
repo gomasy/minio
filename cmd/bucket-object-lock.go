@@ -22,13 +22,14 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/minio/minio/internal/auth"
 	objectlock "github.com/minio/minio/internal/bucket/object/lock"
-	"github.com/minio/minio/internal/bucket/replication"
 	xhttp "github.com/minio/minio/internal/http"
 	"github.com/minio/minio/internal/logger"
-	"github.com/minio/pkg/v3/policy"
+	"github.com/pgsty/silo-pkg/v3/policy"
 )
 
 // BucketObjectLockSys - map of bucket and retention configuration.
@@ -150,7 +151,11 @@ func enforceRetentionBypassForDelete(ctx context.Context, r *http.Request, bucke
 			}
 			// https://docs.aws.amazon.com/AmazonS3/latest/dev/object-lock-overview.html#object-lock-retention-modes
 			// If you try to delete objects protected by governance mode and have s3:BypassGovernanceRetention, the operation will succeed.
-			if checkRequestAuthType(ctx, r, policy.BypassGovernanceRetentionAction, bucket, object.ObjectName) != ErrNone {
+			if reqInfo := logger.GetReqInfo(ctx); reqInfo != nil {
+				reqInfo.BucketName = bucket
+				reqInfo.ObjectName = object.ObjectName
+			}
+			if authorizeRequest(ctx, r, policy.BypassGovernanceRetentionAction) != ErrNone {
 				return errAuthentication
 			}
 		}
@@ -198,7 +203,7 @@ func enforceRetentionBypassForPut(ctx context.Context, r *http.Request, oi Objec
 				byPassSet, r, cred, owner)
 			// Governance mode retention period cannot be shortened, if x-amz-bypass-governance is not set.
 			if !byPassSet {
-				if objRetention.Mode != objectlock.RetGovernance || objRetention.RetainUntilDate.Before((ret.RetainUntilDate.Time)) {
+				if objRetention.Mode != objectlock.RetGovernance || objRetention.RetainUntilDate.Before(ret.RetainUntilDate.Time) {
 					return ObjectLocked{Bucket: oi.Bucket, Object: oi.Name, VersionID: oi.VersionID}
 				}
 			}
@@ -209,7 +214,7 @@ func enforceRetentionBypassForPut(ctx context.Context, r *http.Request, oi Objec
 		case objectlock.RetCompliance:
 			// Compliance retention mode cannot be changed or shortened.
 			// https://docs.aws.amazon.com/AmazonS3/latest/dev/object-lock-overview.html#object-lock-retention-modes
-			if objRetention.Mode != objectlock.RetCompliance || objRetention.RetainUntilDate.Before((ret.RetainUntilDate.Time)) {
+			if objRetention.Mode != objectlock.RetCompliance || objRetention.RetainUntilDate.Before(ret.RetainUntilDate.Time) {
 				return ObjectLocked{Bucket: oi.Bucket, Object: oi.Name, VersionID: oi.VersionID}
 			}
 			apiErr := isPutRetentionAllowed(oi.Bucket, oi.Name,
@@ -242,7 +247,7 @@ func enforceRetentionBypassForPut(ctx context.Context, r *http.Request, oi Objec
 // For objects in "Compliance" mode, retention date cannot be shortened, and mode cannot be altered.
 // For objects with legal hold header set, the s3:PutObjectLegalHold permission is expected to be set
 // Both legal hold and retention can be applied independently on an object
-func checkPutObjectLockAllowed(ctx context.Context, rq *http.Request, bucket, object string, getObjectInfoFn GetObjectInfoFn, retentionPermErr, legalHoldPermErr APIErrorCode) (objectlock.RetMode, objectlock.RetentionDate, objectlock.ObjectLegalHold, APIErrorCode) {
+func checkPutObjectLockAllowed(ctx context.Context, rq *http.Request, bucket, object string, getObjectInfoFn GetObjectInfoFn, retentionPermErr, legalHoldPermErr APIErrorCode, replicaTrusted bool) (objectlock.RetMode, objectlock.RetentionDate, objectlock.ObjectLegalHold, APIErrorCode) {
 	var mode objectlock.RetMode
 	var retainDate objectlock.RetentionDate
 	var legalHold objectlock.ObjectLegalHold
@@ -269,9 +274,7 @@ func checkPutObjectLockAllowed(ctx context.Context, rq *http.Request, bucket, ob
 		return mode, retainDate, legalHold, toAPIErrorCode(ctx, err)
 	}
 
-	replica := rq.Header.Get(xhttp.AmzBucketReplicationStatus) == replication.Replica.String()
-
-	if opts.VersionID != "" && !replica {
+	if opts.VersionID != "" && !replicaTrusted {
 		if objInfo, err := getObjectInfoFn(ctx, bucket, object, opts); err == nil {
 			r := objectlock.GetObjectRetentionMeta(objInfo.UserDefined)
 			t, err := objectlock.UTCNowNTP()
@@ -307,8 +310,8 @@ func checkPutObjectLockAllowed(ctx context.Context, rq *http.Request, bucket, ob
 		if err != nil {
 			return mode, retainDate, legalHold, toAPIErrorCode(ctx, err)
 		}
-		rMode, rDate, err := objectlock.ParseObjectLockRetentionHeaders(rq.Header)
-		if err != nil && (!replica || rMode != "" || !rDate.IsZero()) {
+		rMode, rDate, err := objectlock.ParseObjectLockRetentionHeaders(rq.Header, replicaTrusted)
+		if err != nil && (!replicaTrusted || rMode != "" || !rDate.IsZero()) {
 			return mode, retainDate, legalHold, toAPIErrorCode(ctx, err)
 		}
 		if retentionPermErr != ErrNone {
@@ -316,7 +319,7 @@ func checkPutObjectLockAllowed(ctx context.Context, rq *http.Request, bucket, ob
 		}
 		return rMode, rDate, legalHold, ErrNone
 	}
-	if replica { // replica inherits retention metadata only from source
+	if replicaTrusted { // replica inherits retention metadata only from source
 		return "", objectlock.RetentionDate{}, legalHold, ErrNone
 	}
 	if !retentionRequested && retentionCfg.Validity > 0 {
@@ -342,4 +345,63 @@ func checkPutObjectLockAllowed(ctx context.Context, rq *http.Request, bucket, ob
 // NewBucketObjectLockSys returns initialized BucketObjectLockSys
 func NewBucketObjectLockSys() *BucketObjectLockSys {
 	return &BucketObjectLockSys{}
+}
+
+// objectLockState is the Object Lock metadata of a stored object version
+// together with the replication timestamps that order updates to it.
+type objectLockState struct {
+	mode, retainUntil, retentionTimestamp string
+	legalHold, legalHoldTimestamp         string
+}
+
+func storedObjectLockState(metadata map[string]string) objectLockState {
+	return objectLockState{
+		mode:               metadata[strings.ToLower(xhttp.AmzObjectLockMode)],
+		retainUntil:        metadata[strings.ToLower(xhttp.AmzObjectLockRetainUntilDate)],
+		retentionTimestamp: metadata[ReservedMetadataPrefixLower+ObjectLockRetentionTimestamp],
+		legalHold:          metadata[strings.ToLower(xhttp.AmzObjectLockLegalHold)],
+		legalHoldTimestamp: metadata[ReservedMetadataPrefixLower+ObjectLockLegalHoldTimestamp],
+	}
+}
+
+// olderThan reports whether a stored replication timestamp is missing,
+// unreadable, or earlier than the source timestamp, in which case the
+// replica update wins. A zero source timestamp never wins.
+func olderThan(stored string, src time.Time) bool {
+	if src.IsZero() {
+		return false
+	}
+	ondisk, err := time.Parse(time.RFC3339Nano, stored)
+	return err != nil || ondisk.Before(src)
+}
+
+func (s objectLockState) retentionIsOlderThan(src time.Time) bool {
+	return olderThan(s.retentionTimestamp, src)
+}
+
+func (s objectLockState) legalHoldIsOlderThan(src time.Time) bool {
+	return olderThan(s.legalHoldTimestamp, src)
+}
+
+// restoreRetention and restoreLegalHold put the stored state back into
+// metadata that was rebuilt from a request whose update was not applied.
+func (s objectLockState) restoreRetention(metadata map[string]string) {
+	if s.mode == "" {
+		return
+	}
+	metadata[strings.ToLower(xhttp.AmzObjectLockMode)] = s.mode
+	metadata[strings.ToLower(xhttp.AmzObjectLockRetainUntilDate)] = s.retainUntil
+	if s.retentionTimestamp != "" {
+		metadata[ReservedMetadataPrefixLower+ObjectLockRetentionTimestamp] = s.retentionTimestamp
+	}
+}
+
+func (s objectLockState) restoreLegalHold(metadata map[string]string) {
+	if s.legalHold == "" {
+		return
+	}
+	metadata[strings.ToLower(xhttp.AmzObjectLockLegalHold)] = s.legalHold
+	if s.legalHoldTimestamp != "" {
+		metadata[ReservedMetadataPrefixLower+ObjectLockLegalHoldTimestamp] = s.legalHoldTimestamp
+	}
 }
